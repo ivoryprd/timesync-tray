@@ -1,0 +1,10 @@
+# Build output - build with build.cmd, or grab a Release
+*.exe
+*.pdb
+
+# Runtime log (contains this machine's activity timestamps)
+timesync.log
+
+# The abandoned w32time attempt. Kept locally for reference only; it also holds
+# a registry export of the author's own machine, which has no business in a repo.
+old/
