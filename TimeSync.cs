@@ -19,6 +19,7 @@ namespace ClockFix
     // ====================================================================
     internal static class Program
     {
+        private const string MutexName = "Local\\ClockFix.TimeSync.Tray";
         private static Mutex _instanceLock;
 
         [STAThread]
@@ -54,16 +55,105 @@ namespace ClockFix
                 return 1;
             }
 
+            // Bail out early if a tray instance is already live, before any
+            // elevation attempt - otherwise a second Startup fire would raise a
+            // pointless UAC request only to exit on the mutex a moment later.
+            if (InstanceAlreadyRunning()) return 0;
+
+            // Windows will not auto-elevate a Startup-folder item at logon: it
+            // silently skips it rather than prompting. So the shortcut launches
+            // us unelevated and we elevate ourselves here, which Windows is
+            // perfectly happy to do. Where UAC policy allows it this is silent.
+            if (!Clock.IsElevated() && !HasFlag(args, "--elevated"))
+            {
+                if (TryRelaunchElevated(HasFlag(args, "--show"))) return 0;
+                // Declined or failed: fall through and run unelevated anyway, so
+                // the tray still reports state and offers the manual button.
+            }
+
             // Only one tray instance: the Startup folder can fire more than once
             // (fast startup, re-login) and duplicate icons are confusing.
             bool isNew;
-            _instanceLock = new Mutex(true, "Local\\ClockFix.TimeSync.Tray", out isNew);
+            _instanceLock = new Mutex(true, MutexName, out isNew);
             if (!isNew) return 0;
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new TrayApp(mode == "--show"));
+            Application.Run(new TrayApp(HasFlag(args, "--show")));
             return 0;
+        }
+
+        /// <summary>
+        /// Drops the single-instance lock. The Restart-as-admin path must call
+        /// this before spawning the elevated child, or the child sees the lock
+        /// still held by this process and exits immediately.
+        /// </summary>
+        internal static void ReleaseInstanceLock()
+        {
+            if (_instanceLock == null) return;
+            try { _instanceLock.ReleaseMutex(); }
+            catch { /* not owned; disposing is enough */ }
+            _instanceLock.Dispose();
+            _instanceLock = null;
+        }
+
+        private static bool HasFlag(string[] args, string flag)
+        {
+            foreach (string a in args)
+                if (string.Equals(a, flag, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static bool InstanceAlreadyRunning()
+        {
+            try
+            {
+                Mutex existing;
+                if (Mutex.TryOpenExisting(MutexName, out existing))
+                {
+                    existing.Dispose();
+                    return true;
+                }
+            }
+            catch
+            {
+                // An elevated instance's mutex may not be openable from here.
+                // Not conclusive, so carry on; the mutex below still guards.
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Relaunches through ShellExecute "runas". The child is marked
+        /// --elevated so that an elevation which succeeds without actually
+        /// granting admin cannot spawn an endless chain of relaunches.
+        /// </summary>
+        internal static bool TryRelaunchElevated(bool show)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location);
+                psi.UseShellExecute = true;
+                psi.Verb = "runas";
+                psi.WorkingDirectory = Engine.ExeDir;
+                psi.Arguments = show ? "--show --elevated" : "--elevated";
+                Process.Start(psi);
+                Engine.LogStatic("relaunching elevated");
+                return true;
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                // 1223 == ERROR_CANCELLED, i.e. the UAC prompt was dismissed.
+                Engine.LogStatic(ex.NativeErrorCode == 1223
+                    ? "elevation declined; continuing unelevated"
+                    : "elevation failed (win32 " + ex.NativeErrorCode + "); continuing unelevated");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Engine.LogStatic("elevation failed: " + ex.Message);
+                return false;
+            }
         }
     }
 
@@ -951,19 +1041,19 @@ namespace ClockFix
 
         private void RestartElevated()
         {
-            try
+            // Give up the single-instance lock first, or the elevated child will
+            // see it held and exit on the spot.
+            Program.ReleaseInstanceLock();
+
+            if (Program.TryRelaunchElevated(true))
             {
-                var psi = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location);
-                psi.UseShellExecute = true;
-                psi.Verb = "runas"; // triggers the UAC prompt
-                Process.Start(psi);
                 _quit();
+                return;
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Could not relaunch elevated: " + ex.Message,
-                    "TimeSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
+
+            MessageBox.Show(
+                "Could not relaunch with administrator rights. See the log for details.",
+                "TimeSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 }

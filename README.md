@@ -76,10 +76,27 @@ Two milliseconds off, from 45 hours wrong.
 1. Build it (see below) or drop `TimeSync.exe` anywhere you like.
 2. Press <kbd>Win</kbd>+<kbd>R</kbd>, run `shell:startup`, and put a shortcut to
    `TimeSync.exe` in that folder.
-3. Open the shortcut's Properties → Advanced → tick **Run as administrator**.
 
-That last step is not optional, and it is the one real wart — see
-[Limitations](#limitations).
+That is all. In particular, do **not** tick "Run as administrator" on that
+shortcut: Windows silently skips Startup-folder items that request elevation —
+it does not prompt, it simply never launches them — so the app would appear to
+do nothing at every login. It elevates itself instead.
+
+### Elevation
+
+Setting the system clock requires `SeSystemtimePrivilege`, and a UAC-filtered
+token does not merely have it disabled — it is absent, even when the account is
+an administrator. So the shortcut starts the app unelevated and the app
+immediately relaunches itself through `ShellExecute` with the `runas` verb, and
+the unelevated instance exits.
+
+Depending on your UAC setting that is either one prompt at login, or entirely
+silent (where *Elevate without prompting* is configured). If elevation is
+refused the app keeps running anyway: the tray icon turns red, the window says
+why, and **Restart as admin** retries on demand.
+
+The relaunched child is marked `--elevated` so that an elevation which somehow
+succeeds without granting admin cannot spawn an endless chain of relaunches.
 
 ## Using it
 
@@ -129,13 +146,11 @@ any existing illustration, so the set is genuinely free to reuse.
 
 ## Limitations
 
-**It prompts for UAC at every login.** Setting the system clock requires
-`SeSystemtimePrivilege`, and a UAC-filtered token does not merely have it
-disabled — it is absent. An app launched from the Startup folder therefore
-cannot correct the clock without elevating, even when the account is an
-administrator. The alternatives are a scheduled task running as `SYSTEM` (silent
-but needs installing) or elevating on demand per sync. This build takes the
-prompt.
+**It may prompt for UAC at every login.** The app has to elevate itself to set
+the clock (see [Elevation](#elevation)). Under default UAC settings that means
+one consent prompt per login. If that bothers you, the alternative is a
+scheduled task with *Run with highest privileges* triggered at logon, which
+bypasses UAC entirely at the cost of needing to be installed.
 
 **It only fixes the clock.** UEFI settings live in SPI-flash NVRAM and are not
 battery-backed, so boot order and Secure Boot survive an RTC loss. If those
