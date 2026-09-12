@@ -6,7 +6,7 @@ A tiny Windows tray app that fixes a clock the Windows Time service won't.
 
 It queries several NTP servers itself, over plain UDP, and sets the system clock
 directly. No dependency on `w32time`, no scheduled task, no runtime to install —
-a single ~26 KB executable built by a compiler that already ships with Windows.
+a single ~80 KB executable built by a compiler that already ships with Windows.
 
 ## Why this exists
 
@@ -132,10 +132,19 @@ members. The source sticks to that deliberately.
 
 ## The icons
 
-Drawn from GDI+ primitives at runtime, so the executable carries no embedded
-image assets and stays a single self-contained file. `--export-icons` writes a
-reusable set to `icons/`: four states as multi-resolution `.ico` (16 → 256,
-PNG-compressed entries) plus PNGs at 16/32/64/256 and a contact sheet.
+The four state icons are compiled into the executable as `.ico` resources and
+loaded once at startup. Only the tray sizes — 16/24/32/48, about 23 KB total —
+are embedded: a tray icon is never drawn larger than 48px, so carrying the 128
+and 256 entries would have cost roughly five times that for pixels nothing ever
+reads. The exe's own shell icon does use the full set, since Explorer wants
+those larger sizes in its big-icon views.
+
+`RabbitArt` is still the source of truth for the artwork. It draws the design
+from GDI+ primitives, and `--export-icons` regenerates everything from it:
+`icons/*.ico` as multi-resolution files (16 → 256, PNG-compressed entries),
+`icons/tray/*.ico` at the embedding sizes, PNGs at 16/32/64/256, and a contact
+sheet. Change the drawing code and you must re-run `--export-icons` and rebuild,
+or the exe keeps serving the old embedded copies.
 
 The watch face carries the state colour because it is the largest solid block in
 the design and is the only element that still reads at 16×16 in the tray.

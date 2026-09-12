@@ -6,6 +6,11 @@ REM
 REM Note: that compiler only supports C# 5, so the source deliberately avoids
 REM string interpolation, null-conditional operators and expression-bodied
 REM members. Keep it that way or the build breaks.
+REM
+REM The tray icons are embedded from icons\tray\*.ico, which are committed to
+REM the repo. If you change the artwork in RabbitArt, regenerate them first:
+REM     TimeSync.exe --export-icons
+REM then run this script again to embed the new versions.
 
 setlocal
 
@@ -16,10 +21,35 @@ if not exist "%CSC%" (
     exit /b 1
 )
 
+REM Embedded resources are the tray-sized icons only (16/24/32/48). The exe's
+REM own shell icon uses the full set, which carries the 128 and 256 entries
+REM Explorer wants in large-icon views.
+set RES=
+set RES=%RES% /resource:icons\tray\rabbit-ok.ico,rabbit-ok.ico
+set RES=%RES% /resource:icons\tray\rabbit-syncing.ico,rabbit-syncing.ico
+set RES=%RES% /resource:icons\tray\rabbit-warning.ico,rabbit-warning.ico
+set RES=%RES% /resource:icons\tray\rabbit-error.ico,rabbit-error.ico
+
+if not exist "icons\tray\rabbit-ok.ico" (
+    echo icons\tray\*.ico are missing - building without embedded icons,
+    echo then regenerating them. Run build.cmd again afterwards.
+    "%CSC%" /nologo /optimize+ /platform:anycpu /target:winexe ^
+        /out:TimeSync.exe ^
+        /reference:System.Windows.Forms.dll ^
+        /reference:System.Drawing.dll ^
+        TimeSync.cs
+    if errorlevel 1 exit /b 1
+    TimeSync.exe --export-icons
+    echo Icons regenerated. Re-run build.cmd to embed them.
+    exit /b 0
+)
+
 "%CSC%" /nologo /optimize+ /platform:anycpu /target:winexe ^
     /out:TimeSync.exe ^
     /reference:System.Windows.Forms.dll ^
     /reference:System.Drawing.dll ^
+    /win32icon:icons\rabbit-ok.ico ^
+    %RES% ^
     TimeSync.cs
 
 if errorlevel 1 (

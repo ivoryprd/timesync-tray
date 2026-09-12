@@ -544,17 +544,15 @@ namespace ClockFix
             g.Restore(st);
         }
 
-        public static Icon MakeIcon(int size, Color accent)
-        {
-            using (Bitmap b = Render(size, accent))
-            {
-                // Icon.FromHandle does not own the handle, but these live for the
-                // life of the process, so there is nothing to leak.
-                return Icon.FromHandle(b.GetHicon());
-            }
-        }
-
+        /// <summary>Full set, for reuse and for the exe's shell icon.</summary>
         private static readonly int[] IcoSizes = { 16, 24, 32, 48, 64, 128, 256 };
+
+        /// <summary>
+        /// What actually gets embedded in the exe. A tray icon is never drawn
+        /// larger than 48px, so carrying 128 and 256 entries would quintuple the
+        /// resource size for pixels nothing ever reads.
+        /// </summary>
+        private static readonly int[] TraySizes = { 16, 24, 32, 48 };
 
         public static void ExportSet(string dir)
         {
@@ -566,9 +564,13 @@ namespace ClockFix
             set.Add(new KeyValuePair<string, Color>("rabbit-warning", Warn));
             set.Add(new KeyValuePair<string, Color>("rabbit-error", Bad));
 
+            string trayDir = Path.Combine(dir, "tray");
+            Directory.CreateDirectory(trayDir);
+
             foreach (KeyValuePair<string, Color> item in set)
             {
-                WriteIco(Path.Combine(dir, item.Key + ".ico"), item.Value);
+                WriteIco(Path.Combine(dir, item.Key + ".ico"), item.Value, IcoSizes);
+                WriteIco(Path.Combine(trayDir, item.Key + ".ico"), item.Value, TraySizes);
                 foreach (int sz in new int[] { 16, 32, 64, 256 })
                 {
                     using (Bitmap b = Render(sz, item.Value))
@@ -596,10 +598,10 @@ namespace ClockFix
         }
 
         /// <summary>Multi-resolution .ico with PNG-compressed entries.</summary>
-        private static void WriteIco(string path, Color accent)
+        private static void WriteIco(string path, Color accent, int[] sizes)
         {
             var pngs = new List<byte[]>();
-            foreach (int sz in IcoSizes)
+            foreach (int sz in sizes)
             {
                 using (Bitmap b = Render(sz, accent))
                 using (var ms = new MemoryStream())
@@ -612,14 +614,14 @@ namespace ClockFix
             using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
             using (var w = new BinaryWriter(fs))
             {
-                w.Write((ushort)0);              // reserved
-                w.Write((ushort)1);              // 1 == icon
-                w.Write((ushort)IcoSizes.Length);
+                w.Write((ushort)0);            // reserved
+                w.Write((ushort)1);            // 1 == icon
+                w.Write((ushort)sizes.Length);
 
-                int offset = 6 + 16 * IcoSizes.Length;
-                for (int i = 0; i < IcoSizes.Length; i++)
+                int offset = 6 + 16 * sizes.Length;
+                for (int i = 0; i < sizes.Length; i++)
                 {
-                    int sz = IcoSizes[i];
+                    int sz = sizes[i];
                     w.Write((byte)(sz >= 256 ? 0 : sz)); // 0 means 256
                     w.Write((byte)(sz >= 256 ? 0 : sz));
                     w.Write((byte)0);   // palette entries
@@ -632,6 +634,46 @@ namespace ClockFix
                 }
                 foreach (byte[] p in pngs) w.Write(p);
             }
+        }
+    }
+
+    // ====================================================================
+    //  Embedded icon resources
+    //
+    //  The icons ship as .ico resources compiled into the exe rather than being
+    //  drawn at run time. RabbitArt remains the source of truth for the artwork
+    //  and still produces those files via --export-icons; this only loads them.
+    //
+    //  A side benefit: an Icon built from a stream owns its handle and disposes
+    //  cleanly, unlike Icon.FromHandle(bitmap.GetHicon()), which leaks the HICON
+    //  it is handed.
+    // ====================================================================
+    internal static class Icons
+    {
+        private static Icon _ok, _syncing, _warning, _error;
+
+        public static Icon Ok      { get { return Load(ref _ok,      "rabbit-ok.ico"); } }
+        public static Icon Syncing { get { return Load(ref _syncing, "rabbit-syncing.ico"); } }
+        public static Icon Warning { get { return Load(ref _warning, "rabbit-warning.ico"); } }
+        public static Icon Error   { get { return Load(ref _error,   "rabbit-error.ico"); } }
+
+        private static Icon Load(ref Icon cache, string resource)
+        {
+            if (cache != null) return cache;
+            try
+            {
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource))
+                {
+                    // Falls back rather than throwing, so a build that forgot the
+                    // /resource switches still runs with a generic icon.
+                    cache = (s == null) ? SystemIcons.Application : new Icon(s);
+                }
+            }
+            catch
+            {
+                cache = SystemIcons.Application;
+            }
+            return cache;
         }
     }
 
@@ -821,9 +863,9 @@ namespace ClockFix
 
         public TrayApp(bool showAtStart)
         {
-            _iconOk = RabbitArt.MakeIcon(32, RabbitArt.Ok);
-            _iconWarn = RabbitArt.MakeIcon(32, RabbitArt.Warn);
-            _iconBad = RabbitArt.MakeIcon(32, RabbitArt.Bad);
+            _iconOk = Icons.Ok;
+            _iconWarn = Icons.Warning;
+            _iconBad = Icons.Error;
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("Show details", null, delegate { ShowWindow(); });
@@ -912,8 +954,7 @@ namespace ClockFix
             _quit = quit;
 
             Text = "TimeSync";
-            try { Icon = RabbitArt.MakeIcon(32, RabbitArt.Ok); }
-            catch { /* window still works without an icon */ }
+            Icon = Icons.Ok;
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(640, 480);
             MinimumSize = new Size(480, 360);
